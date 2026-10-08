@@ -12,7 +12,9 @@
   h1{font-size:20px;margin:8px 0 16px}
   .card{background:var(--card);border-radius:14px;padding:16px;margin-bottom:14px}
   label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
-  input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid #2c323d;background:#12151b;color:var(--fg);font-size:15px}
+  input,select{width:100%;padding:11px 12px;border-radius:10px;border:1px solid #2c323d;background:#12151b;color:var(--fg);font-size:15px}
+  .row2{display:flex;gap:8px}
+  .row2>div{flex:1;min-width:0}
   button{appearance:none;border:none;border-radius:10px;padding:12px 14px;font-size:15px;font-weight:600;color:#fff;background:var(--acc);cursor:pointer;width:100%}
   button.sec{background:#2c323d}
   button:disabled{opacity:.5}
@@ -59,6 +61,46 @@
   <div class="card">
     <label>解锁密码 (电脑登录密码)</label>
     <input id="pin" autocomplete="off">
+    <label>指示灯</label>
+    <div class="row2">
+      <div>
+        <label>闪烁间隔（秒）</label>
+        <input id="blinkSec" type="number" min="0.5" max="5" step="0.1" value="2">
+      </div>
+      <div>
+        <label>亮灯时长（毫秒）</label>
+        <input id="onMs" type="number" min="50" max="2000" step="10" value="200">
+      </div>
+    </div>
+    <div class="row2">
+      <div>
+        <label>空闲颜色</label>
+        <select id="idleColor">
+          <option value="red">红</option>
+          <option value="orange">橙</option>
+          <option value="yellow">黄</option>
+          <option value="green" selected>绿</option>
+          <option value="cyan">青</option>
+          <option value="blue">蓝</option>
+          <option value="purple">紫</option>
+          <option value="white">白</option>
+        </select>
+      </div>
+      <div>
+        <label>蓝牙已连接颜色</label>
+        <select id="bleColor">
+          <option value="red">红</option>
+          <option value="orange">橙</option>
+          <option value="yellow">黄</option>
+          <option value="green">绿</option>
+          <option value="cyan">青</option>
+          <option value="blue" selected>蓝</option>
+          <option value="purple">紫</option>
+          <option value="white">白</option>
+        </select>
+      </div>
+    </div>
+    <div class="hint">空闲和蓝牙连接时按上面的间隔闪。默认空闲绿、蓝牙蓝，亮 200 毫秒、间隔 2 秒。解锁时的白、绿、红提示不会变。</div>
     <label>解锁时间点</label>
     <div class="times" id="timeList"></div>
     <div class="addrow">
@@ -138,7 +180,22 @@ function onMsg(str){
     if(j.ssid) $("ssid").value=j.ssid;
     if(j.pin)  $("pin").value=j.pin;
     if(typeof j.times==="string" && j.times.length){ times=j.times.split(",").filter(x=>x); renderTimes(); }
+    if(typeof j.blink==="number" && j.blink>0) $("blinkSec").value=j.blink/1000;
+    if(typeof j.on==="number" && j.on>0) $("onMs").value=j.on;
+    if(j.idle) $("idleColor").value=j.idle;
+    if(j.ble) $("bleColor").value=j.ble;
   }
+}
+
+function blinkCmd(){
+  const sec=parseFloat($("blinkSec").value);
+  const on=parseInt($("onMs").value,10);
+  if(!(sec>=0.5 && sec<=5)){ log("闪烁间隔需在 0.5 到 5 秒"); return null; }
+  if(!(on>=50 && on<=2000)){ log("亮灯时长需在 50 到 2000 毫秒"); return null; }
+  const period=Math.round(sec*1000);
+  if(on>=period){ log("亮灯时长必须短于闪烁间隔"); return null; }
+  const idle=$("idleColor").value, ble=$("bleColor").value;
+  return "BLINK:"+period+","+on+","+idle+","+ble;
 }
 
 $("btnWifi").onclick=async()=>{
@@ -149,8 +206,11 @@ $("btnWifi").onclick=async()=>{
 };
 
 $("btnSave").onclick=async()=>{
+  const blink=blinkCmd();
+  if(!blink) return;
   await send("PIN:"+$("pin").value);
   await send("TIMES:"+times.join(","));
+  await send(blink);
   await send("SAVE");
   log("已保存设置"); setTimeout(()=>send("GET"),300);
 };
