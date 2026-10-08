@@ -128,7 +128,39 @@ const $=id=>document.getElementById(id);
 const log=m=>{const l=$("log");l.textContent=(new Date().toLocaleTimeString()+"  "+m+"\n")+l.textContent;};
 const enc=new TextEncoder(), decd=new TextDecoder();
 
-async function send(s){ if(!rxc){log("未连接");return;} await rxc.writeValue(enc.encode(s)); }
+let noteBuf="";
+function takeNotes(chunk){
+  noteBuf += chunk;
+  while(true){
+    const a = noteBuf.indexOf("{");
+    if(a < 0){ if(noteBuf.length > 80) noteBuf = ""; return; }
+    if(a > 0) noteBuf = noteBuf.slice(a);
+    const b = noteBuf.indexOf("}");
+    if(b < 0){ if(noteBuf.length > 800) noteBuf = ""; return; }
+    const piece = noteBuf.slice(0, b+1);
+    try{ JSON.parse(piece); }
+    catch(e){ noteBuf = noteBuf.slice(1); continue; }
+    noteBuf = noteBuf.slice(b+1);
+    onMsg(piece);
+  }
+}
+// ATT default payload is 20 bytes. BLINK:ms,on,idle,ble is 22-28, so a single
+// write is chopped and the board drops it. Longer commands are framed as
+// '+' continue chunks and a final '=' chunk, each <= 20 bytes.
+async function send(s){
+  if(!rxc){log("未连接");return;}
+  const bytes = enc.encode(s);
+  if(bytes.length <= 20){ await rxc.writeValue(bytes); return; }
+  const CHUNK = 17;
+  for(let i=0;i<bytes.length;i+=CHUNK){
+    const last = i+CHUNK >= bytes.length;
+    const slice = bytes.slice(i, Math.min(i+CHUNK, bytes.length));
+    const out = new Uint8Array(slice.length+1);
+    out[0] = last ? 0x3d : 0x2b;
+    out.set(slice, 1);
+    await rxc.writeValue(out);
+  }
+}
 
 function renderTimes(){
   const c=$("timeList"); c.innerHTML="";
@@ -156,7 +188,7 @@ $("btnConn").onclick=async()=>{
     txc=await s.getCharacteristic(TX);
     await txc.startNotifications();
     txc.addEventListener('characteristicvaluechanged',e=>{
-      const s=decd.decode(e.target.value); onMsg(s);
+      takeNotes(decd.decode(e.target.value));
     });
     setConn(true); log("已连接"); await send("GET");
   }catch(e){ log("连接失败: "+e.message); }
@@ -208,11 +240,14 @@ $("btnWifi").onclick=async()=>{
 $("btnSave").onclick=async()=>{
   const blink=blinkCmd();
   if(!blink) return;
-  await send("PIN:"+$("pin").value);
-  await send("TIMES:"+times.join(","));
-  await send(blink);
-  await send("SAVE");
-  log("已保存设置"); setTimeout(()=>send("GET"),300);
+  try{
+    await send("PIN:"+$("pin").value);
+    await send("TIMES:"+times.join(","));
+    await send(blink);
+    await send("SAVE");
+    log("已保存设置 "+blink);
+    setTimeout(()=>send("GET"),400);
+  }catch(e){ log("保存失败: "+(e && e.message ? e.message : e)); }
 };
 
 $("btnNow").onclick=async()=>{ if(confirm("立即执行一次解锁动作？")) await send("UNLOCK"); };
