@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 解锁配置</title>
+<style>
+  :root{--bg:#0f1115;--card:#1b1f27;--fg:#e6e9ef;--mut:#8b93a3;--acc:#4f8cff;--ok:#2ecc71;--err:#ff5a5a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;padding:16px}
+  .wrap{max-width:520px;margin:0 auto}
+  h1{font-size:20px;margin:8px 0 16px}
+  .card{background:var(--card);border-radius:14px;padding:16px;margin-bottom:14px}
+  label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+  input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid #2c323d;background:#12151b;color:var(--fg);font-size:15px}
+  button{appearance:none;border:none;border-radius:10px;padding:12px 14px;font-size:15px;font-weight:600;color:#fff;background:var(--acc);cursor:pointer;width:100%}
+  button.sec{background:#2c323d}
+  button:disabled{opacity:.5}
+  .row{display:flex;gap:8px}
+  .row button{flex:1}
+  .st{font-size:14px;color:var(--mut)}
+  .st b{color:var(--fg)}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#666;margin-right:6px;vertical-align:middle}
+  .dot.on{background:var(--ok)} .dot.off{background:var(--err)}
+  .times{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .tt{background:#12151b;border:1px solid #2c323d;border-radius:20px;padding:6px 10px 6px 12px;font-size:14px;display:flex;align-items:center;gap:8px}
+  .tt span{cursor:pointer;color:var(--err);font-weight:700}
+  .addrow{display:flex;gap:8px;margin-top:8px}
+  .addrow input{flex:1}
+  .addrow button{width:auto;padding:11px 16px}
+  .log{font:12px/1.4 monospace;color:var(--mut);white-space:pre-wrap;max-height:120px;overflow:auto}
+  .hint{font-size:12px;color:var(--mut);margin-top:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ESP32 定时解锁配置</h1>
+
+  <div class="card">
+    <button id="btnConn">连接板子</button>
+    <div class="hint">需用 Chrome / Edge（安卓或电脑），并打开蓝牙。</div>
+    <div class="st" style="margin-top:10px">
+      <div><span id="d1" class="dot"></span>蓝牙 <b id="sConn">未连接</b></div>
+      <div><span id="d2" class="dot"></span>WiFi <b id="sWifi">—</b> <span id="sIp"></span></div>
+      <div>板子时间 <b id="sTime">—</b></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>WiFi 名称 (2.4G)</label>
+    <input id="ssid" autocomplete="off">
+    <label>WiFi 密码</label>
+    <input id="wpass" type="password" autocomplete="off">
+    <div class="row" style="margin-top:12px">
+      <button class="sec" id="btnWifi">保存并连 WiFi</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>解锁密码 (电脑登录密码)</label>
+    <input id="pin" autocomplete="off">
+    <label>解锁时间点</label>
+    <div class="times" id="timeList"></div>
+    <div class="addrow">
+      <input id="newTime" type="time">
+      <button id="btnAdd">添加</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="btnSave">保存全部</button>
+      <button class="sec" id="btnNow">立即解锁一次</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="log" id="log"></div>
+  </div>
+</div>
+
+<script>
+const SVC="6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const RX="6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+const TX="6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+let dev,rxc,txc;
+let times=[];
+const $=id=>document.getElementById(id);
+const log=m=>{const l=$("log");l.textContent=(new Date().toLocaleTimeString()+"  "+m+"\n")+l.textContent;};
+const enc=new TextEncoder(), decd=new TextDecoder();
+
+async function send(s){ if(!rxc){log("未连接");return;} await rxc.writeValue(enc.encode(s)); }
+
+function renderTimes(){
+  const c=$("timeList"); c.innerHTML="";
+  times.sort();
+  times.forEach((t,i)=>{
+    const d=document.createElement("div"); d.className="tt";
+    d.innerHTML=t+" <span>✕</span>";
+    d.querySelector("span").onclick=()=>{times.splice(i,1);renderTimes();};
+    c.appendChild(d);
+  });
+}
+
+$("btnAdd").onclick=()=>{
+  const v=$("newTime").value;
+  if(v && !times.includes(v)){ times.push(v); renderTimes(); }
+};
+
+$("btnConn").onclick=async()=>{
+  try{
+    dev=await navigator.bluetooth.requestDevice({filters:[{name:"ESP32-Unlock"}],optionalServices:[SVC]});
+    dev.addEventListener('gattserverdisconnected',()=>{setConn(false);log("已断开");});
+    const srv=await dev.gatt.connect();
+    const s=await srv.getPrimaryService(SVC);
+    rxc=await s.getCharacteristic(RX);
+    txc=await s.getCharacteristic(TX);
+    await txc.startNotifications();
+    txc.addEventListener('characteristicvaluechanged',e=>{
+      const s=decd.decode(e.target.value); onMsg(s);
+    });
+    setConn(true); log("已连接"); await send("GET");
+  }catch(e){ log("连接失败: "+e.message); }
+};
+
+function setConn(ok){
+  $("sConn").textContent=ok?"已连接":"未连接";
+  $("d1").className="dot "+(ok?"on":"off");
+  if(!ok){rxc=null;txc=null;}
+}
+
+function onMsg(str){
+  log("板子: "+str);
+  let j; try{j=JSON.parse(str);}catch(e){return;}
+  if(j.msg){ return; }
+  if("wifi" in j){
+    $("sWifi").textContent=j.wifi?"已连接":"未连接";
+    $("d2").className="dot "+(j.wifi?"on":"off");
+    $("sIp").textContent=j.ip?("("+j.ip+")"):"";
+    $("sTime").textContent=j.time||"—";
+    if(j.ssid) $("ssid").value=j.ssid;
+    if(j.pin)  $("pin").value=j.pin;
+    if(typeof j.times==="string" && j.times.length){ times=j.times.split(",").filter(x=>x); renderTimes(); }
+  }
+}
+
+$("btnWifi").onclick=async()=>{
+  await send("SSID:"+$("ssid").value);
+  await send("PASS:"+$("wpass").value);
+  await send("SAVE");
+  log("连接 WiFi 中…"); await send("WIFI");
+};
+
+$("btnSave").onclick=async()=>{
+  await send("PIN:"+$("pin").value);
+  await send("TIMES:"+times.join(","));
+  await send("SAVE");
+  log("已保存设置"); setTimeout(()=>send("GET"),300);
+};
+
+$("btnNow").onclick=async()=>{ if(confirm("立即执行一次解锁动作？")) await send("UNLOCK"); };
+</script>
+</body>
+</html>
